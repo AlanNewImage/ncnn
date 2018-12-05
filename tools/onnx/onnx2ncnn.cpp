@@ -12,6 +12,7 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+#include <float.h>
 #include <stdio.h>
 #include <limits.h>
 
@@ -63,6 +64,28 @@ static std::vector<int> get_node_attr_ai(const onnx::NodeProto& node, const char
             for (int j=0; j<attr.ints_size(); j++)
             {
                 v[j] = attr.ints(j);
+            }
+
+            break;
+        }
+    }
+
+    return v;
+}
+
+static std::vector<float> get_node_attr_af(const onnx::NodeProto& node, const char* key)
+{
+    std::vector<float> v;
+
+    for (int i=0; i<node.attribute_size(); i++)
+    {
+        const onnx::AttributeProto& attr = node.attribute(i);
+        if (attr.name() == key)
+        {
+            v.resize(attr.floats_size());
+            for (int j=0; j<attr.floats_size(); j++)
+            {
+                v[j] = attr.floats(j);
             }
 
             break;
@@ -431,6 +454,10 @@ int main(int argc, char** argv)
         {
             fprintf(pp, "%-16s", "BatchNorm");
         }
+        else if (op == "Clip")
+        {
+            fprintf(pp, "%-16s", "Clip");
+        }
         else if (op == "Concat")
         {
             fprintf(pp, "%-16s", "Concat");
@@ -456,10 +483,23 @@ int main(int argc, char** argv)
                 fprintf(pp, "%-16s", "Convolution");
             }
         }
+        else if (op == "ConvTranspose")
+        {
+            int group = get_node_attr_i(node, "group", 1);
+            if (group > 1) {
+                fprintf(pp, "%-16s", "DeconvolutionDepthWise");
+            } else {
+                fprintf(pp, "%-16s", "Deconvolution");
+            }
+        }
         else if (op == "Dropout")
         {
             fprintf(pp, "%-16s", "Dropout");
             output_size = 1;
+        }
+        else if (op == "Elu")
+        {
+            fprintf(pp, "%-16s", "ELU");
         }
         else if (op == "Gemm")
         {
@@ -488,6 +528,18 @@ int main(int argc, char** argv)
         {
             fprintf(pp, "%-16s", "Pooling");
         }
+        else if (op == "ImageScaler")
+        {
+            fprintf(pp, "%-16s", "Scale");
+        }
+        else if (op == "InstanceNormalization")
+        {
+            fprintf(pp, "%-16s", "InstanceNorm");
+        }
+        else if (op == "LeakyRelu")
+        {
+            fprintf(pp, "%-16s", "ReLU");
+        }
         else if (op == "LRN")
         {
             fprintf(pp, "%-16s", "LRN");
@@ -499,6 +551,14 @@ int main(int argc, char** argv)
         else if (op == "Mul")
         {
             fprintf(pp, "%-16s", "BinaryOp");
+        }
+        else if (op == "Pad")
+        {
+            fprintf(pp, "%-16s", "Padding");
+        }
+        else if (op == "PRelu")
+        {
+            fprintf(pp, "%-16s", "PReLU");
         }
         else if (op == "Relu")
         {
@@ -584,6 +644,12 @@ int main(int argc, char** argv)
             int pool = op == "AveragePool" ? 1 : 0;
             int pad_mode = 1;
 
+            if (auto_pad == "SAME_LOWER" || auto_pad == "SAME_UPPER")
+            {
+                // TODO
+                pad_mode = 2;
+            }
+
             fprintf(pp, " 0=%d", pool);
 
             if (kernel_shape.size() == 1) {
@@ -640,6 +706,13 @@ int main(int argc, char** argv)
                 }
             }
             fwrite_tensor_proto_data(B, bp);
+        }
+        else if (op == "Clip")
+        {
+            float min = get_node_attr_f(node, "min", -FLT_MAX);
+            float max = get_node_attr_f(node, "max", FLT_MAX);
+            fprintf(pp, " 0=%f", min);
+            fprintf(pp, " 1=%f", max);
         }
         else if (op == "Concat")
         {
@@ -706,8 +779,9 @@ int main(int argc, char** argv)
                 fprintf(pp, " 13=%d", strides[0]);
             }
 
-            if (auto_pad == "SAME_UPPER")
+            if (auto_pad == "SAME_LOWER" || auto_pad == "SAME_UPPER")
             {
+                // TODO
                 fprintf(pp, " 4=-233");
             }
             else
@@ -745,9 +819,125 @@ int main(int argc, char** argv)
                 fwrite_tensor_proto_data(B, bp);
             }
         }
+        else if (op == "ConvTranspose")
+        {
+            const onnx::TensorProto& W = weights[node.input(1)];
+
+            int num_filter = W.dims(1);
+            int has_bias = node.input_size() == 3 ? 1 : 0;
+
+            std::string auto_pad = get_node_attr_s(node, "auto_pad");//TODO
+            std::vector<int> kernel_shape = get_node_attr_ai(node, "kernel_shape");
+            std::vector<int> dilations = get_node_attr_ai(node, "dilations");
+            std::vector<int> strides = get_node_attr_ai(node, "strides");
+            std::vector<int> output_padding = get_node_attr_ai(node, "output_padding");//TODO implement adj
+            std::vector<int> output_shape = get_node_attr_ai(node, "output_shape");//TODO
+            std::vector<int> pads = get_node_attr_ai(node, "pads");
+            int group = get_node_attr_i(node, "group", 1);
+
+            fprintf(pp, " 0=%d", num_filter);
+
+            if (kernel_shape.size() == 1) {
+                fprintf(pp, " 1=%d", kernel_shape[0]);
+            } else if (kernel_shape.size() == 2) {
+                fprintf(pp, " 1=%d", kernel_shape[1]);
+                fprintf(pp, " 11=%d", kernel_shape[0]);
+            }
+
+            if (dilations.size() == 1) {
+                fprintf(pp, " 2=%d", dilations[0]);
+            } else if (dilations.size() == 2) {
+                fprintf(pp, " 2=%d", dilations[1]);
+                fprintf(pp, " 12=%d", dilations[0]);
+            }
+
+            if (strides.size() == 1) {
+                fprintf(pp, " 3=%d", strides[0]);
+            } else if (strides.size() == 2) {
+                fprintf(pp, " 3=%d", strides[1]);
+                fprintf(pp, " 13=%d", strides[0]);
+            }
+
+            if (auto_pad == "SAME_LOWER" || auto_pad == "SAME_UPPER")
+            {
+                // TODO
+                fprintf(pp, " 4=-233");
+            }
+            else
+            {
+
+            if (pads.size() == 1) {
+                fprintf(pp, " 4=%d", pads[0]);
+            } else if (pads.size() == 2) {
+                fprintf(pp, " 4=%d", pads[1]);
+                fprintf(pp, " 14=%d", pads[0]);
+            } else if (pads.size() == 4) {
+                fprintf(pp, " 4=%d", pads[1]);
+                fprintf(pp, " 14=%d", pads[0]);
+                // TODO hpad2=pads[2]   wpad2=pads[3]
+            }
+
+            }
+
+            fprintf(pp, " 5=%d", has_bias);
+
+            fprintf(pp, " 6=%d", get_tensor_proto_data_size(W));
+
+            if (group > 1) {
+                fprintf(pp, " 7=%d", group);
+            }
+
+            int quantize_tag = 0;
+            fwrite(&quantize_tag, sizeof(int), 1, bp);
+
+            int maxk = 0;
+            if (kernel_shape.size() == 2)
+            {
+                maxk = kernel_shape[1] * kernel_shape[0];
+            }
+            else
+            {
+                maxk = kernel_shape[0] * kernel_shape[0];
+            }
+            int weight_data_size = get_tensor_proto_data_size(W);
+            const float* weight_data = 0;
+            if (W.has_raw_data())
+            {
+                weight_data = (const float*)W.raw_data().data();
+            }
+            else if (W.data_type() == 1)
+            {
+                weight_data = W.float_data().data();
+            }
+            for (int g=0; g<group; g++)
+            {
+            // reorder weight from inch-outch to outch-inch
+            int num_filter_g = num_filter / group;
+            int num_input = weight_data_size / maxk / num_filter_g / group;
+            const float* weight_data_ptr = weight_data + g * maxk * num_filter_g * num_input;
+            for (int k=0; k<num_filter_g; k++)
+            {
+                for (int j=0; j<num_input; j++)
+                {
+                    fwrite(weight_data_ptr + (j*num_filter_g + k) * maxk, sizeof(float), maxk, bp);
+                }
+            }
+            }
+
+            if (has_bias)
+            {
+                const onnx::TensorProto& B = weights[node.input(2)];
+                fwrite_tensor_proto_data(B, bp);
+            }
+        }
         else if (op == "Dropout")
         {
             // no-op
+        }
+        else if (op == "Elu")
+        {
+            float alpha = get_node_attr_f(node, "alpha", 1.f);
+            fprintf(pp, " 0=%f", alpha);
         }
         else if (op == "Gemm")
         {
@@ -792,6 +982,40 @@ int main(int argc, char** argv)
 
             fprintf(pp, " 0=%d", pool);
             fprintf(pp, " 4=%d", global_pool);
+        }
+        else if (op == "ImageScaler")
+        {
+            std::vector<float> bias = get_node_attr_af(node, "bias");
+            float scale = get_node_attr_f(node, "scale", 1.f);
+
+            int channels = bias.size();
+
+            fprintf(pp, " 0=%d", channels);
+            fprintf(pp, " 1=1");
+
+            for (int j=0; j<channels; j++)
+            {
+                fwrite(&scale, sizeof(float), 1, bp);
+            }
+            fwrite(&bias[0], sizeof(float), channels, bp);
+        }
+        else if (op == "InstanceNormalization")
+        {
+            float eps = get_node_attr_f(node, "epsilon", 1e-5f);
+            std::vector<float> scale = get_node_attr_af(node, "scale");
+            std::vector<float> bias = get_node_attr_af(node, "B");
+
+            fprintf(pp, " 0=%d", (int)scale.size());
+            fprintf(pp, " 1=%f", eps);
+
+            fwrite(scale.data(), sizeof(float), scale.size(), bp);
+            fwrite(bias.data(), sizeof(float), bias.size(), bp);
+        }
+        else if (op == "LeakyRelu")
+        {
+            float alpha = get_node_attr_f(node, "alpha", 0.01f);
+
+            fprintf(pp, " 0=%f", alpha);
         }
         else if (op == "LRN")
         {
@@ -844,6 +1068,48 @@ int main(int argc, char** argv)
         {
             int op_type = 2;
             fprintf(pp, " 0=%d", op_type);
+        }
+        else if (op == "Pad")
+        {
+            std::string mode = get_node_attr_s(node, "mode");
+            std::vector<int> pads = get_node_attr_ai(node, "pads");
+            float value = get_node_attr_f(node, "value", 0.f);
+
+            int type = 0;
+            if (mode == "constant")
+            {
+                type = 0;
+            }
+            else if (mode == "edge")
+            {
+                type = 1;
+            }
+            else if (mode == "reflect")
+            {
+                // FIXME
+            }
+
+            int top = pads[0];
+            int bottom = pads[2];
+            int left = pads[1];
+            int right = pads[3];
+
+            fprintf(pp, " 0=%d", top);
+            fprintf(pp, " 1=%d", bottom);
+            fprintf(pp, " 2=%d", left);
+            fprintf(pp, " 3=%d", right);
+            fprintf(pp, " 4=%d", type);
+            fprintf(pp, " 5=%f", value);
+        }
+        else if (op == "PRelu")
+        {
+            const onnx::TensorProto& slope = weights[node.input(1)];
+
+            int num_slope = get_tensor_proto_data_size(slope);
+
+            fprintf(pp, " 0=%d", num_slope);
+
+            fwrite_tensor_proto_data(slope, bp);
         }
         else if (op == "Reshape")
         {

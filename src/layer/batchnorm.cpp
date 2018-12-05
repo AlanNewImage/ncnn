@@ -68,27 +68,63 @@ int BatchNorm::load_model(const ModelBin& mb)
     return 0;
 }
 
-int BatchNorm::forward_inplace(Mat& bottom_top_blob) const
+int BatchNorm::forward_inplace(Mat& bottom_top_blob, const Option& opt) const
 {
     // a = bias - slope * mean / sqrt(var)
     // b = slope / sqrt(var)
     // value = b * value + a
 
-    int w = bottom_top_blob.w;
-    int h = bottom_top_blob.h;
-    int size = w * h;
+    int dims = bottom_top_blob.dims;
 
-    #pragma omp parallel for
-    for (int q=0; q<channels; q++)
+    if (dims == 1)
     {
-        float* ptr = bottom_top_blob.channel(q);
+        int w = bottom_top_blob.w;
 
-        float a = a_data[q];
-        float b = b_data[q];
+        float* ptr = bottom_top_blob;
 
-        for (int i=0; i<size; i++)
+        #pragma omp parallel for num_threads(opt.num_threads)
+        for (int i=0; i<w; i++)
         {
-            ptr[i] = b * ptr[i] + a;
+            ptr[i] = b_data[i] * ptr[i] + a_data[i];
+        }
+    }
+
+    if (dims == 2)
+    {
+        int w = bottom_top_blob.w;
+        int h = bottom_top_blob.h;
+
+        #pragma omp parallel for num_threads(opt.num_threads)
+        for (int i=0; i<h; i++)
+        {
+            float* ptr = bottom_top_blob.row(i);
+            float a = a_data[i];
+            float b = b_data[i];
+
+            for (int j=0; j<w; j++)
+            {
+                ptr[j] = b * ptr[j] + a;
+            }
+        }
+    }
+
+    if (dims == 3)
+    {
+        int w = bottom_top_blob.w;
+        int h = bottom_top_blob.h;
+        int size = w * h;
+
+        #pragma omp parallel for num_threads(opt.num_threads)
+        for (int q=0; q<channels; q++)
+        {
+            float* ptr = bottom_top_blob.channel(q);
+            float a = a_data[q];
+            float b = b_data[q];
+
+            for (int i=0; i<size; i++)
+            {
+                ptr[i] = b * ptr[i] + a;
+            }
         }
     }
 
